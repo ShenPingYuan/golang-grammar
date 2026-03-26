@@ -561,6 +561,193 @@ End:
 
 ## 5. 复合数据类型
 
+### 5.1 数组
+
+数组长度固定，是**值类型**（赋值/传参会拷贝）。
+
+```go
+var arr [3]int                // [0, 0, 0]
+arr2 := [3]int{1, 2, 3}
+arr3 := [...]int{1, 2, 3}    // 编译器推断长度
+arr4 := [5]int{0: 10, 4: 50} // 指定索引初始化
+
+len(arr2) // 3
+
+// 访问和修改数组元素
+fmt.Println(arr[0])
+arr[1] = 99
+fmt.Println(arr)
+
+// 遍历数组
+for i := 0; i < len(arr); i++ {
+    fmt.Println(arr[i])
+}
+// for range
+for index, value := range arr {
+    fmt.Println(index, value)
+}
+
+// 多维数组
+matrix := [2][3]int{
+    {1, 2, 3},
+    {4, 5, 6},
+}
+```
+
+Go 中数组是值类型，赋值会复制整个数组。
+
+```go
+a := [3]int{1, 2, 3}
+b := a
+b[0] = 100
+
+fmt.Println(a) // [1 2 3]
+fmt.Println(b) // [100 2 3]
+```
+
+这也是为什么在 Go 中更常使用切片而不是数组。
+
+### 5.2 切片 (Slice)
+
+切片是**引用类型**，底层指向一个数组。Go 中实际使用切片远多于数组。
+
+```go
+// 声明
+var s []int              // nil 切片
+s2 := []int{1, 2, 3}     // 字面量
+s3 := make([]int, 5)     // len=5, cap=5，长度为 5，容量为 5
+s4 := make([]int, 3, 10) // len=3, cap=10，长度为 3，容量为 10
+
+// 从数组/切片截取（左闭右开），包含起始索引，不包含结束索引
+arr := [5]int{1, 2, 3, 4, 5}
+s5 := arr[1:4]  // [2, 3, 4]
+s6 := arr[:3]   // [1, 2, 3]
+s7 := arr[2:]   // [3, 4, 5]
+s8 := arr[:]    // [1, 2, 3, 4, 5]
+/
+
+// 切片也可以从切片截取
+s9 := []int{1, 2, 3, 4, 5}
+s10 := s9[1:3]       // [2, 3]
+fmt.Println(s10)     // [2 3]
+fmt.Println(s9[:3])  // [1 2 3]
+fmt.Println(s9[2:])  // [3 4 5]
+
+// append：追加元素（底层数组满了会触发扩容）
+// 注意：`append` 触发扩容后会返回新的底层数组，因此必须接收返回值。
+/*
+  原理：切片底层存储是数组，切片的容量即底层数组的长度，数组的长度是不可变的，因此如果切片容量足够，直接在原数组上追加；如果容量不足，`append` 会分配一个新的更大的底层数组，复制原有数据，并追加新元素。
+*/
+s = append(s, 1, 2, 3)
+s = append(s, []int{4, 5}...) // 展开追加
+
+// copy
+src := []int{1, 2, 3}
+dst := make([]int, len(src))
+copy(dst, src)
+
+// 删除元素（无内置方法，用切片技巧）
+s = append(s[:i], s[i+1:]...) // 删除索引 i
+
+// len 和 cap，长度和容量
+fmt.Println(len(s), cap(s))
+
+// 切片判空用 len，不要用 nil 判断
+if len(s) == 0 { ... }
+```
+
+**切片底层结构**：`{ pointer *array, len int, cap int }`
+
+### 5.3 映射 (Map)
+
+```go
+// 声明与初始化
+var m map[string]int              // nil map，不能写入
+m1 := map[string]int{"a": 1, "b": 2}
+m2 := make(map[string]int)       // 空 map，可以写入
+
+// 增 / 改
+m2["key"] = 100
+
+// 查
+value := m1["a"]
+value, ok := m1["a"] // ok 判断 key 是否存在
+if v, ok := m1["c"]; !ok {
+    fmt.Println("key not found")
+}
+
+// 删
+delete(m1, "a")
+
+// 遍历（无序）
+for k, v := range m1 {
+    fmt.Println(k, v)
+}
+
+// map 长度
+len(m1)
+```
+
+> Map 是**引用类型**，不是并发安全的。并发场景用 `sync.Map` 或加锁。
+
+### 5.4 结构体 (Struct)
+
+```go
+// 定义
+type User struct {
+    Name string
+    Age  int
+    Email string
+}
+
+// 初始化
+u1 := User{"Alice", 25, "alice@go.dev"}    // 按顺序
+u2 := User{Name: "Bob", Age: 30}           // 按字段名（推荐）
+u3 := new(User)                            // 返回 *User，字段为零值
+var u4 User                                // 零值结构体
+
+// 访问与修改
+u2.Email = "bob@go.dev"
+
+// 指针访问（自动解引用）
+p := &u2
+p.Name = "Bob2" // 等同于 (*p).Name = "Bob2"
+
+// 匿名字段（嵌入/组合）
+type Admin struct {
+    User          // 嵌入 User
+    Level int
+}
+a := Admin{User: User{Name: "Root", Age: 0}, Level: 1}
+a.Name // 直接访问 User 的字段（提升）
+
+// 匿名结构体
+point := struct {
+    X, Y int
+}{10, 20}
+
+// 结构体标签（用于 JSON 序列化等）
+type Product struct {
+    ID    int    `json:"id"`
+    Name  string `json:"name"`
+    Price float64 `json:"price,omitempty"`
+}
+```
+
+### 5.5 自定义类型与类型别名
+
+```go
+// 自定义类型（全新类型，可以添加方法）
+type Celsius float64
+type Handler func(string) error
+
+// 类型别名（完全等同于原类型）
+type Byte = uint8
+type Rune = int32
+```
+
+---
+
 ## 6. 指针
 
 
