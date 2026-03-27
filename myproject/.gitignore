@@ -1,0 +1,28 @@
+# Binaries
+bin/
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# Generated
+gen/proto/
+
+# Config overrides
+configs/config.local.yaml
+
+# Test
+coverage.out
+*.test
+
+# Docker
+*.log

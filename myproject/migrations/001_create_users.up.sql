@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS users (
+    id         VARCHAR(64)  PRIMARY KEY,
+    username   VARCHAR(100) NOT NULL,
+    email      VARCHAR(255) NOT NULL UNIQUE,
+    password   VARCHAR(255) NOT NULL,
+    role       VARCHAR(20)  NOT NULL DEFAULT 'user',
+    created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_email (email)
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    id         VARCHAR(64)    PRIMARY KEY,
+    user_id    VARCHAR(64)    NOT NULL,
+    product    VARCHAR(255)   NOT NULL,
+    amount     DECIMAL(10, 2) NOT NULL,
+    status     VARCHAR(20)    NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_user_id (user_id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);

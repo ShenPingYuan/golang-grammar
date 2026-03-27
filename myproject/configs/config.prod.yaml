@@ -1,0 +1,26 @@
+server:
+  port: "8080"
+  mode: "production"
+
+jwt:
+  secret: "${JWT_SECRET}"
+  expiry: "2h"
+
+database:
+  driver: "mysql"
+  dsn: "${DB_DSN}"
+
+redis:
+  addr: "${REDIS_ADDR}"
+  password: "${REDIS_PASSWORD}"
+  db: 0
+
+log:
+  level: "info"
+  format: "json"
+
+mq:
+  driver: "kafka"
+  brokers:
+    - "${KAFKA_BROKER_1}"
+    - "${KAFKA_BROKER_2}"

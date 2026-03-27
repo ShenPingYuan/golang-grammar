@@ -1,0 +1,14 @@
+server:
+  port: "8888"
+  mode: "test"
+
+jwt:
+  secret: "test-secret"
+  expiry: "1h"
+
+database:
+  driver: "memory"
+
+log:
+  level: "error"
+  format: "text"

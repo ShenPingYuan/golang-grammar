@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package user;
+
+option go_package = "myproject/gen/proto/user";
+
+service UserService {
+  rpc CreateUser (CreateUserRequest)  returns (UserResponse);
+  rpc GetUser    (GetUserRequest)     returns (UserResponse);
+  rpc ListUsers  (ListUsersRequest)   returns (ListUsersResponse);
+  rpc Login      (LoginRequest)       returns (LoginResponse);
+}
+
+message CreateUserRequest {
+  string username = 1;
+  string email    = 2;
+  string password = 3;
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message ListUsersRequest {
+  int32 page = 1;
+  int32 size = 2;
+}
+
+message UserResponse {
+  string id       = 1;
+  string username = 2;
+  string email    = 3;
+  string role     = 4;
+}
+
+message ListUsersResponse {
+  repeated UserResponse users = 1;
+  int64 total                 = 2;
+}
+
+message LoginRequest {
+  string email    = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string token = 1;
+}

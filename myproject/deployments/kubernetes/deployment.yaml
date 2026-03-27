@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myproject-server
+  labels:
+    app: myproject
+    component: server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myproject
+      component: server
+  template:
+    metadata:
+      labels:
+        app: myproject
+        component: server
+    spec:
+      containers:
+        - name: server
+          image: myproject/server:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SERVER_PORT
+              value: "8080"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: myproject-secrets
+                  key: jwt-secret
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

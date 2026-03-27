@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package order;
+
+option go_package = "myproject/gen/proto/order";
+
+service OrderService {
+  rpc CreateOrder  (CreateOrderRequest)  returns (OrderResponse);
+  rpc GetOrder     (GetOrderRequest)     returns (OrderResponse);
+  rpc ListOrders   (ListOrdersRequest)   returns (ListOrdersResponse);
+  rpc PayOrder     (PayOrderRequest)     returns (OrderResponse);
+}
+
+message CreateOrderRequest {
+  string product = 1;
+  double amount  = 2;
+}
+
+message GetOrderRequest {
+  string id = 1;
+}
+
+message ListOrdersRequest {
+  string user_id = 1;
+  int32  page    = 2;
+  int32  size    = 3;
+}
+
+message OrderResponse {
+  string id      = 1;
+  string user_id = 2;
+  string product = 3;
+  double amount  = 4;
+  string status  = 5;
+}
+
+message ListOrdersResponse {
+  repeated OrderResponse orders = 1;
+  int64 total                   = 2;
+}
+
+message PayOrderRequest {
+  string id = 1;
+}

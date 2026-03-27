@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package common;
+
+option go_package = "myproject/gen/proto/common";
+
+message Pagination {
+  int32 page  = 1;
+  int32 size  = 2;
+  int64 total = 3;
+}
+
+message Empty {}

@@ -1,0 +1,11 @@
+server:
+  port: "8080"
+  mode: "development"
+
+jwt:
+  secret: "dev-secret-key"
+  expiry: "72h"
+
+log:
+  level: "debug"
+  format: "text"
