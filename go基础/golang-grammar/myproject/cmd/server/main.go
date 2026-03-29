@@ -17,6 +17,7 @@ import (
 )
 
 func main() {
+	// 加载配置和日志设置
 	cfg := config.Load("configs/config.yaml")
 	l := logger.New(cfg.Log.Level)
 
