@@ -43,6 +43,7 @@ func main() {
 	router.PATCH("/ping", patch)
 	router.OPTIONS("/ping", options)
 	router.HEAD("/ping", head)
+	router.POST("/form_post", form_post)
 	router.GET("/", get)
 	router.Run() // listen and serve on 0.0.0.0:8080 by default
 }
@@ -145,4 +146,14 @@ func options(c *gin.Context) {
 
 func head(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "head!"})
+}
+
+func form_post(c *gin.Context) {
+	message := c.PostForm("message")
+	nick := c.DefaultPostForm("nick", "anonymous")
+	
+	c.JSON(http.StatusOK, gin.H{
+		"message": message,
+		"nick":    nick,
+	})
 }
