@@ -7,6 +7,8 @@ require (
 	github.com/gin-contrib/sessions v0.0.0-20190101140330-dc5246754963
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-playground/validator/v10 v10.30.2
+	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/utrack/gin-csrf v0.0.0-20190424104817-40fb8d2c8fca
 	golang.org/x/time v0.15.0
 )
