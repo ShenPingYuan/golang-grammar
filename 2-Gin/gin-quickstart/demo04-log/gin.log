@@ -1,0 +1,4 @@
+::1 - [Thu, 02 Apr 2026 22:24:17 CST] "GET /seting HTTP/1.1 404 0s "PostmanRuntime/7.53.0" "
+[GIN] 2026/04/02 - 22:24:17 |[90;43m 404 [0m|[90;47m   8.58ms [0m|             ::1 |[97;44m GET     [0m "/seting"
+::1 - [Thu, 02 Apr 2026 22:24:22 CST] "GET /ping HTTP/1.1 200 0s "PostmanRuntime/7.53.0" "
+[GIN] 2026/04/02 - 22:24:22 |[97;42m 200 [0m|[90;47m       0s [0m|             ::1 |[97;44m GET     [0m "/ping"
