@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 
+	_ "net/http/pprof" // 注册 pprof 路由
+
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
@@ -36,8 +38,8 @@ type UserRequest struct {
 }
 
 type LoginRequest struct {
-	Username    string `form:"username,default=spy" binding:"-"`
-	Password    string `form:"password" binding:"-"`
+	Username    string `form:"user_name,default=spy" binding:"-"`
+	Password    string `form:"pass_word" binding:"-"`
 	Permissions []int  `form:"permissions" collection_format:"csv"`
 }
 
@@ -120,20 +122,59 @@ func main() {
 	// SkipQueryString indicates that the logger should not log the query string.
 	// For example, /path?q=1 will be logged as /path
 	loggerConfig := gin.LoggerConfig{SkipQueryString: true}
+	// 单独起一个端口暴露 pprof，不要和业务端口混在一起
+	go func() {
+		// 这个端口绝不能对外暴露，只在内网或通过 SSH 隧道访问
+		http.ListenAndServe("localhost:6060", nil)
+	}()
 
 	router := gin.Default()
-
+	router.MaxMultipartMemory = 8 << 20 // 8 MiB
 	router.Use(gin.LoggerWithConfig(loggerConfig))
 	router.Use(RateLimiter())
 	store := cookie.NewStore([]byte("secret"))
 	router.Use(sessions.Sessions("mysession", store))
-	router.Use(csrf.Middleware(csrf.Options{
-		Secret: "csrf-token-secret",
-		ErrorFunc: func(c *gin.Context) {
-			c.String(403, "CSRF token mismatch")
-			c.Abort()
-		},
-	}))
+	// router.Use(csrf.Middleware(csrf.Options{
+	// 	Secret: "csrf-token-secret",
+	// 	ErrorFunc: func(c *gin.Context) {
+	// 		c.String(403, "CSRF token mismatch")
+	// 		c.Abort()
+	// 	},
+	// }))
+	router.POST("/upload", func(c *gin.Context) {
+		file, err := c.FormFile("file")
+		if err != nil {
+			c.JSON(400, gin.H{"msg": "文件获取失败" + err.Error()})
+			return
+		}
+
+		// 保存到本地
+		dst := "./uploads/" + file.Filename
+		if err := c.SaveUploadedFile(file, dst); err != nil {
+			c.JSON(500, gin.H{"msg": "保存失败"})
+			return
+		}
+
+		c.JSON(200, gin.H{
+			"msg":  "上传成功",
+			"name": file.Filename,
+			"size": file.Size,
+		})
+	})
+	router.POST("/uploads", func(c *gin.Context) {
+		form, _ := c.MultipartForm()
+		files := form.File["files"] // 字段名 files
+
+		for _, f := range files {
+			dst := "./uploads/" + f.Filename
+			c.SaveUploadedFile(f, dst)
+		}
+
+		c.JSON(200, gin.H{
+			"msg":   "上传成功",
+			"count": len(files),
+		})
+	})
 	router.GET("/set", func(c *gin.Context) {
 		session := sessions.Default(c)
 		count := session.Get("count")

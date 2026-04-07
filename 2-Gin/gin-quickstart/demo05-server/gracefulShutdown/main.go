@@ -13,14 +13,28 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/time/rate"
 )
+
+func RateLimiter(r rate.Limit, b int) gin.HandlerFunc {
+	limiter := rate.NewLimiter(r, b)
+	return func(c *gin.Context) {
+		if !limiter.Allow() {
+			c.AbortWithStatusJSON(429, gin.H{"msg": "请求过于频繁"})
+			return
+		}
+		c.Next()
+	}
+}
 
 func main() {
 
 	router := gin.Default()
+	router.HandleMethodNotAllowed = true
 	router.SetTrustedProxies([]string{"192.168.1.2"})
 	router.GET("/", func(c *gin.Context) {
-		time.Sleep(5 * time.Second)
+		time.Sleep(1 * time.Second)
+		c.Abort()
 		c.String(http.StatusOK, "Welcome Gin Server")
 	})
 
