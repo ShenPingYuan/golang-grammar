@@ -3,11 +3,15 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/lib/pq"
+	"gorm.io/datatypes"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -15,20 +19,26 @@ import (
 )
 
 type User struct {
-	ID           uint           // Standard field for the primary key
-	Name         string         // A regular string field
-	Email        *string        `gorm:"default:123456@gmail.com"` // A pointer to a string, allowing for null values
-	Age          uint8          //`gorm:"default:18"`               // An unsigned 8-bit integer
-	Birthday     time.Time      // A pointer to time.Time, can be null
-	MemberNumber sql.NullString // Uses sql.NullString to handle nullable strings
-	ActivatedAt  sql.NullTime   // Uses sql.NullTime for nullable time fields
-	CreatedAt    time.Time      // Automatically managed by GORM for creation time
-	UpdatedAt    time.Time      // Automatically managed by GORM for update time
-	ignored      string         // fields that aren't exported are ignored
+	ID           uint                          `gorm:"autoIncrement:true"`                       // Standard field for the primary key
+	Name         string                        `gorm:"index;check:name<>'ms'"`                   // A regular string field
+	Email        *string                       `gorm:"default:123456@gmail.com;index:idx_email"` // A pointer to a string, allowing for null values
+	Age          uint8                         //`gorm:"default:18"`               // An unsigned 8-bit integer
+	Birthday     time.Time                     // A pointer to time.Time, can be null
+	MemberNumber sql.NullString                // Uses sql.NullString to handle nullable strings
+	ActivatedAt  sql.NullTime                  // Uses sql.NullTime for nullable time fields
+	CreatedAt    time.Time                     // Automatically managed by GORM for creation time
+	UpdatedAt    time.Time                     // Automatically managed by GORM for update time
+	ignored      string                        // fields that aren't exported are ignored
+	Addresses    datatypes.JSONType[[]Address] `gorm:"type:json"`
+}
+
+type Address struct {
+	City string `json:"city"`
+	Line string `json:"line"`
 }
 
 func main() {
-	dns := "root:root123@tcp(localhost:3306)/gorm_db?charset=utf8mb4&parseTime=True&loc=Local"
+	dns := "root:8rME16k*8a0iLMIP@tcp(192.168.1.63:13306)/gorm_db?charset=utf8mb4&parseTime=True&loc=Local"
 
 	db, err := gorm.Open(mysql.New(mysql.Config{
 		DSN:                       dns,
@@ -44,48 +54,25 @@ func main() {
 		
 	})
 
-	if err != nil {
-		log.Fatalf("failed to connect database: %v", err)
-	}
-
-	sqlDB, err := db.DB()
-
-	// SetMaxIdleConns 用于设置连接池中空闲连接的最大数量。
-	sqlDB.SetMaxIdleConns(10)
-
-	// SetMaxOpenConns 设置打开数据库连接的最大数量。
-	sqlDB.SetMaxOpenConns(100)
-
-	// SetConnMaxLifetime 设置了连接可复用的最大时间。
-	sqlDB.SetConnMaxLifetime(time.Hour)
-
-	// 查看当前连接状态
-	stats := sqlDB.Stats()
-	fmt.Printf("Open: %d, InUse: %d, Idle: %d\n", stats.OpenConnections, stats.InUse, stats.Idle)
-
-	// ========== 加上这行：自动迁移 ==========
-	err = db.AutoMigrate(&User{})
-	if err != nil {
-		log.Fatal(err)
-	}
-	// ======================================
-
-	// birthday, _ := time.Parse("2006-01-02", "1998-12-04")
-	// user := User{Name: "spy", Age: 18, Birthday: birthday}
-
-	// // err = gorm.G[User](db).Create(context.Background(), &user)
-	// result := db.Create(&user)
-	// if result.Error != nil {
-	// 	log.Fatalln(err)
+	// u := User{
+	// 	Name: "spy1",
+	// 	Age:  18,
+	// 	Addresses: datatypes.NewJSONType([]Address{
+	// 		{City: "Shanghai", Line: "Road 1"},
+	// 	}),
 	// }
+	// db.Create(&u)
 
-	//  users := []*User{
-	// 	{Name: "Jinzhu", Age: 18, Birthday: time.Now()},
-	// 	{Name: "Jackson", Age: 19, Birthday: time.Now()},
-	// }
+	// // 更新（整体替换）
+	// u.Addresses = datatypes.NewJSONType([]Address{
+	// 	{City: "Beijing", Line: "Street 2"},
+	// })
+	// db.Save(&u)
 
-	// fmt.Printf("创建成功，ID: %d\n", user.ID)
-	// fmt.Println(result.RowsAffected)
+	var u2 User
+	db.Model(&User{}).Where("id=?", 70).First(&u2)
+	fmt.Println(u2)
+	u2.Addresses.Data()
 
 	// result = db.Create(&users)
 	// if result.Error != nil {
