@@ -3,8 +3,12 @@ module gorm_demo
 go 1.26.1
 
 require (
+	github.com/google/uuid v1.6.0
+	github.com/lib/pq v1.12.3
+	gorm.io/datatypes v1.2.7
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.31.1
+	gorm.io/plugin/dbresolver v1.6.2
 )
 
 require (
