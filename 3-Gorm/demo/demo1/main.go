@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 type User struct {
@@ -28,13 +31,18 @@ func main() {
 	dns := "root:root123@tcp(localhost:3306)/gorm_db?charset=utf8mb4&parseTime=True&loc=Local"
 
 	db, err := gorm.Open(mysql.New(mysql.Config{
-		DSN:                       dns,   // DSN data source name
-		DefaultStringSize:         256,   // string 类型字段的默认长度
-		DisableDatetimePrecision:  true,  // 禁用 datetime 精度，MySQL 5.6 之前的数据库不支持
-		DontSupportRenameIndex:    true,  // 重命名索引时采用删除并新建的方式，MySQL 5.7 之前的数据库和 MariaDB 不支持重命名索引
-		DontSupportRenameColumn:   true,  // 用 `change` 重命名列，MySQL 8 之前的数据库和 MariaDB 不支持重命名列
-		SkipInitializeWithVersion: false, // 根据当前 MySQL 版本自动配置
-	}), &gorm.Config{})
+		DSN:                       dns,
+		DefaultStringSize:         256,
+		DisableDatetimePrecision:  true,
+		DontSupportRenameIndex:    true,
+		DontSupportRenameColumn:   true,
+		SkipInitializeWithVersion: false,
+	}), &gorm.Config{
+		// ========== 加上这段：打印 SQL ==========
+		Logger: logger.Default.LogMode(logger.Info), // Silent/Error/Warn/Info
+		// ======================================
+		
+	})
 
 	if err != nil {
 		log.Fatalf("failed to connect database: %v", err)
@@ -84,26 +92,110 @@ func main() {
 	// 	log.Fatalln(err)
 	// }
 
-	var users = []User{
-		{Name: "Jinzhu", Birthday: time.Now()},
-		{Name: "Jackson", Birthday: time.Now()},
-	}
-	result := db.Create(&users)
-	if result.Error != nil {
-		log.Fatalln(err)
-	}
-	db.Session(&gorm.Session{SkipHooks: true}).Create(&users)
-	fmt.Println("users:", users)
+	// var users = []User{
+	// 	{Name: "Jinzhu", Birthday: time.Now()},
+	// 	{Name: "Jackson", Birthday: time.Now()},
+	// }
+	// result := db.Create(&users)
+	// if result.Error != nil {
+	// 	log.Fatalln(err)
+	// }
+	// db.Session(&gorm.Session{SkipHooks: true}).Create(&users)
+	// fmt.Println("users:", users)
 
 	var user User
 	// ctx := context.Background()
-	result = db.Where("ID=?", 11).First(&user)
+	result := db.Where("ID=?", 11).First(&user)
 	// user, err := gorm.G[User](db).Where("ID=?", 10).Take(ctx)
 	err = result.Error
 	if err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
 		fmt.Println(err)
 	} else {
 		fmt.Printf("用户信息: %+v\n", user)
-
 	}
+
+	var ctx = context.Background()
+	user, _ = gorm.G[User](db).First(ctx)
+
+	// u1, err := gorm.G[User](db).Find(context.Background())
+	// fmt.Println("u1:", u1)
+	var u2 User
+	_ = db.Find(&u2)
+	fmt.Println("u2:", u2)
+
+	u3, _ := gorm.G[User](db).Where("id=?", 10).First(ctx)
+	fmt.Println("u3:", u3)
+
+	users1, _ := gorm.G[User](db).Where("id IN ?", []int{1, 3, 5}).Find(ctx)
+	fmt.Println("users1:", users1)
+
+	var user3 User
+	db.Where("id=? or name=?", 11, "Jinzhu").Where("name=?", "Jinzhu").Select("id", "Name", "Created_At").Order("Created_At desc").Distinct("id", "Name", "Created_At").First(&user3)
+	fmt.Printf("user3: %+v\n", user3)
+
+	var r []struct {
+		Name  string
+		Count int64
+	}
+	db.Model(&User{}).Distinct("name", "age").Group("name").Select("name", "count(*) as count").Find(&r)
+	fmt.Println(r)
+
+	var u4 User
+	db.Clauses(clause.Locking{
+		Strength: "update",
+	}).Where("id=?", 10).First(&u4)
+	fmt.Printf("user3: %+v\n", u4)
+
+	db.Model(&User{}).Where("id=?", 1).Update("name", "Michael")
+
+	email := "michael@example.com"
+	u4.Email = &email
+	db.Save(&u4)
+
+	db.Model(&User{}).Where("id=?", 1).Updates(map[string]any{"name": "ms123", "age": 30})
+	db.Model(&User{}).Where("id=?", 1).Select("*").Omit("birthday", "created_at", "id").Updates(User{})
+
+	db.Model(&User{}).Where("id=?", 1).Select("age").Updates(map[string]any{"name": "ms123", "age": 30})
+
+	// db.Model(&User{}).Where("id=?", 10).Update("name", gorm.Expr("CONCAT(name, ':', email)"))
+
+	r1, err := gorm.G[Result](db).Raw("select * from users where Id=?", 5).Find(ctx)
+	fmt.Println(r1)
+
+	var r2 Result
+	db.Raw("select * from users where Id=@id", sql.Named("id", 1)).Find(&r2)
+	fmt.Println(r2)
+	r3 := db.Exec("update users set name=? where id=?", "周玲", 1)
+	fmt.Println(r3.RowsAffected)
+
+	var u5 User
+	stmt := db.Session(&gorm.Session{DryRun: true}).First(&u5, 1).Statement
+	fmt.Println(stmt.SQL.String())
+	fmt.Println(stmt.Vars...)
+
+	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return tx.Model(&User{}).Where("id = ?", 100).Limit(10).Order("age desc").Find(&[]User{})
+	})
+	fmt.Println(sql)
+
+	// var uname string
+	// var age int
+	var r4 Result
+	rows, err := db.Table("users").Where("id<3").Select("*").Rows()
+	defer rows.Close()
+	for rows.Next() {
+		// rows.Scan(&r4.ID, &r4.Name)
+		db.ScanRows(rows, &r4)
+		fmt.Println(r4)
+	}
+}
+
+func (u *User) BeforeUpdate(tx *gorm.DB) (err error) {
+	fmt.Println("\n更新前")
+	return nil
+}
+
+type Result struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
