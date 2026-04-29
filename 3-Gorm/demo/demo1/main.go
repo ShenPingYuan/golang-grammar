@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +12,6 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -40,7 +37,7 @@ type Address struct {
 func main() {
 	dns := "root:8rME16k*8a0iLMIP@tcp(192.168.1.63:13306)/gorm_db?charset=utf8mb4&parseTime=True&loc=Local"
 
-	db, err := gorm.Open(mysql.New(mysql.Config{
+	db, _ := gorm.Open(mysql.New(mysql.Config{
 		DSN:                       dns,
 		DefaultStringSize:         256,
 		DisableDatetimePrecision:  true,
@@ -51,7 +48,7 @@ func main() {
 		// ========== 加上这段：打印 SQL ==========
 		Logger: logger.Default.LogMode(logger.Info), // Silent/Error/Warn/Info
 		// ======================================
-		
+
 	})
 
 	// u := User{
