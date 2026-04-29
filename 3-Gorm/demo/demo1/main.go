@@ -50,7 +50,6 @@ func main() {
 		Logger: logger.Default.LogMode(logger.Info), // Silent/Error/Warn/Info
 		// ======================================
 	})
-	db.AutoMigrate(&User{})
 
 	// u := User{
 	// 	Name: "spy1",
@@ -66,12 +65,8 @@ func main() {
 	// 	{City: "Beijing", Line: "Street 2"},
 	// })
 	// db.Save(&u)
-
-	var u2 User
-	db.Model(&User{}).Where("id=?", 70).First(&u2)
-	fmt.Println(u2)
-	u2.Addresses.Data()
-
+	var users []User
+	db.Model(&User{}).Where("id !=?", 70).Offset(10).Limit(-1).Find(&users)
 }
 
 type Post struct {
