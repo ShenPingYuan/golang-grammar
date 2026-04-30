@@ -1108,3 +1108,327 @@ db.Model(&user).Association("Orders").Find(&orders, "amount > ?", 50)
 ```
 
 ---
+
+## 11. 预加载
+
+```go
+var users []User
+
+// =============================================
+//     Preload（每个关联单独一条 SQL）
+// =============================================
+
+// --- 基本预加载 ---
+db.Preload("Orders").Find(&users)
+// 生成 2 条 SQL:
+//   ① SELECT * FROM users
+//   ② SELECT * FROM orders WHERE user_id IN (1, 2, 3, ...)
+// 查完 users 后，自动把每个 user 的 orders 填充到 user.Orders 字段
+// 如果 users 有 100 个，只发 2 条 SQL（不是 101 条，解决了 N+1 问题）
+
+// --- 条件预加载 ---
+db.Preload("Orders", "amount > ?", 100).Find(&users)
+// 生成 2 条 SQL:
+//   ① SELECT * FROM users
+//   ② SELECT * FROM orders WHERE user_id IN (...) AND amount > 100
+// 只预加载 amount > 100 的订单
+
+// --- 自定义预加载 ---
+db.Preload("Orders", func(db *gorm.DB) *gorm.DB {
+    return db.Where("amount > ?", 50).Order("created_at DESC").Limit(5)
+}).Find(&users)
+// 生成 2 条 SQL:
+//   ① SELECT * FROM users
+//   ② SELECT * FROM orders WHERE user_id IN (...) AND amount > 50 ORDER BY created_at DESC LIMIT 5
+// ⚠️ Limit(5) 是全局 Limit，不是每个 user 取 5 条！
+//    如果想每个 user 取最新 5 个 order，需要用子查询或应用层处理
+
+// --- 嵌套预加载 ---
+db.Preload("Orders.Items").Find(&users)
+// 生成 3 条 SQL:
+//   ① SELECT * FROM users
+//   ② SELECT * FROM orders WHERE user_id IN (...)
+//   ③ SELECT * FROM items WHERE order_id IN (...)
+// 先加载 users → 再加载每个 user 的 orders → 再加载每个 order 的 items
+
+// 同时预加载多个关联
+db.Preload("Orders").Preload("Profile").Find(&users)
+// 生成 3 条 SQL:
+//   ① SELECT * FROM users
+//   ② SELECT * FROM orders WHERE user_id IN (...)
+//   ③ SELECT * FROM profiles WHERE user_id IN (...)
+
+// --- 预加载全部关联 ---
+db.Preload(clause.Associations).Find(&users)
+// 自动预加载 User 的所有直接关联（Orders、Profile 等）
+// ⚠️ 只加载第一层，不会递归加载嵌套关联（如 Orders.Items）
+
+// =============================================
+//   Joins 预加载（单条 SQL，适合一对一 / Belongs To）
+// =============================================
+
+db.Joins("Profile").Find(&users)
+// 生成 1 条 SQL:
+//   SELECT users.*, profiles.bio, profiles.avatar, ...
+//   FROM users LEFT JOIN profiles ON profiles.user_id = users.id
+// 用 LEFT JOIN 一次性查出 users 和 profiles
+// 比 Preload 少一条 SQL，性能更好
+
+// 条件 Joins 预加载
+db.Joins("Profile", db.Where(&Profile{Bio: "engineer"})).Find(&users)
+// 生成 SQL:
+//   SELECT users.*, profiles.*
+//   FROM users LEFT JOIN profiles ON profiles.user_id = users.id AND profiles.bio = 'engineer'
+// 只 JOIN bio = 'engineer' 的 profile
+
+// =============================================
+//          Preload vs Joins 选择
+// =============================================
+//
+// Preload:
+//   - 发多条 SQL（1 + N 个关联 = 1+N 条，不是 1+每行）
+//   - 适合 Has Many / Many To Many（一对多、多对多）
+//   - 不改变主查询结果的行数
+//
+// Joins:
+//   - 发 1 条 SQL（LEFT JOIN）
+//   - 适合 Has One / Belongs To（一对一）
+//   - ⚠️ 用于 Has Many 时会导致主记录重复（JOIN 展开）
+```
+
+---
+
+## 12. 事务
+
+```go
+// =============================================
+//          自动事务（推荐）
+// =============================================
+
+// db.Transaction 自动管理 Begin / Commit / Rollback
+err := db.Transaction(func(tx *gorm.DB) error {
+    // ⚠️ 在事务内部必须使用 tx 而非 db，否则操作不在事务中
+
+    if err := tx.Create(&User{Name: "Alice"}).Error; err != nil {
+        return err // 返回任何 error → 自动 ROLLBACK，所有操作撤销
+    }
+
+    if err := tx.Create(&Order{Amount: 100, UserID: 1}).Error; err != nil {
+        return err // 这里出错 → 上面的 User 也会被回滚
+    }
+
+    return nil // 返回 nil → 自动 COMMIT，所有操作生效
+})
+// err != nil 说明事务失败（已回滚）
+
+// =============================================
+//          嵌套事务 / SavePoint
+// =============================================
+
+db.Transaction(func(tx *gorm.DB) error {
+    tx.Create(&user1) // 操作 1
+
+    // 嵌套事务：内部会自动创建 SAVEPOINT
+    tx.Transaction(func(tx2 *gorm.DB) error {
+        tx2.Create(&user2) // 操作 2
+        return errors.New("rollback inner")
+        // 返回 error → ROLLBACK TO SAVEPOINT → 只有 user2 被回滚
+    })
+
+    // user1 不受影响，外层事务继续
+    return nil // user1 正常提交
+})
+
+// 手动 SavePoint
+db.Transaction(func(tx *gorm.DB) error {
+    tx.Create(&user1)      // 操作 1
+
+    tx.SavePoint("sp1")    // 创建保存点 sp1
+    tx.Create(&user2)      // 操作 2
+    tx.RollbackTo("sp1")   // 回滚到 sp1 → user2 撤销
+
+    return nil // user1 正常提交，user2 已被回滚
+})
+
+// =============================================
+//            手动事务
+// =============================================
+
+tx := db.Begin() // 开始事务
+if err := tx.Error; err != nil {
+    return err
+}
+
+// ⚠️ 推荐用 defer 兜底，防止忘记 Rollback 导致连接泄漏
+defer func() {
+    if r := recover(); r != nil {
+        tx.Rollback() // panic 时回滚
+    }
+}()
+
+if err := tx.Create(&user).Error; err != nil {
+    tx.Rollback() // 出错回滚
+    return err
+}
+
+if err := tx.Create(&order).Error; err != nil {
+    tx.Rollback()
+    return err
+}
+
+tx.Commit() // 全部成功，提交
+
+// ⚠️ 手动事务的风险：
+//   忘记 Rollback → 数据库连接一直被占用（连接泄漏）
+//   忘记 Commit   → 事务超时，所有操作都不生效
+//   所以强烈推荐使用 db.Transaction() 自动管理
+```
+
+---
+
+## 13. Hook（钩子）
+
+```go
+// Hook 是在数据库操作前后自动调用的方法
+// 执行顺序：
+//   创建: BeforeSave → BeforeCreate → [INSERT] → AfterCreate → AfterSave
+//   更新: BeforeSave → BeforeUpdate → [UPDATE] → AfterUpdate → AfterSave
+//   删除: BeforeDelete → [DELETE] → AfterDelete
+//   查询: [SELECT] → AfterFind
+//
+// 如果任何 Before* Hook 返回 error → 中断操作，不执行 SQL，事务中会自动回滚
+
+type User struct {
+    gorm.Model
+    Name string
+    UUID string
+    Age  int
+}
+
+// 创建前自动生成 UUID
+func (u *User) BeforeCreate(tx *gorm.DB) error {
+    u.UUID = uuid.New().String()
+    // 在 INSERT 执行之前，u.UUID 已被赋值
+    // 所以插入的记录会带有 UUID
+    return nil
+}
+
+// 创建 + 更新前都会触发的校验
+func (u *User) BeforeSave(tx *gorm.DB) error {
+    if u.Age < 0 {
+        return errors.New("age cannot be negative")
+        // 返回 error → SQL 不会执行 → 事务回滚
+    }
+    return nil
+}
+
+// 查询后处理（每条记录查出来后都会调用）
+func (u *User) AfterFind(tx *gorm.DB) error {
+    // 比如：解密手机号、拼接头像 URL 等
+    // u.Phone = decrypt(u.Phone)
+    return nil
+}
+
+// 删除前检查
+func (u *User) BeforeDelete(tx *gorm.DB) error {
+    var count int64
+    tx.Model(&Order{}).Where("user_id = ?", u.ID).Count(&count)
+    if count > 0 {
+        return errors.New("cannot delete user with orders")
+        // 有订单的用户不允许删除
+    }
+    return nil
+}
+
+// ===================== 跳过 Hook =====================
+// 某些批量操作不想触发 Hook（比如数据迁移），用 SkipHooks
+db.Session(&gorm.Session{SkipHooks: true}).Create(&user)
+// 不触发 BeforeSave / BeforeCreate / AfterCreate / AfterSave
+```
+
+---
+
+## 14. Scopes 与链式调用
+
+```go
+// Scope 是可复用的查询片段，类型签名为 func(*gorm.DB) *gorm.DB
+// 把常用的查询逻辑封装成 Scope，在不同地方复用
+
+// ===================== 通用分页 Scope =====================
+func Paginate(page, pageSize int) func(db *gorm.DB) *gorm.DB {
+    return func(db *gorm.DB) *gorm.DB {
+        if page <= 0 {
+            page = 1
+        }
+        if pageSize <= 0 {
+            pageSize = 10
+        }
+        return db.Offset((page - 1) * pageSize).Limit(pageSize)
+    }
+}
+// 使用: db.Scopes(Paginate(2, 20)).Find(&users)
+// 生成 SQL: SELECT * FROM users LIMIT 20 OFFSET 20  (第 2 页，每页 20 条)
+
+// ===================== 状态过滤 Scope =====================
+func Active(db *gorm.DB) *gorm.DB {
+    return db.Where("active = ?", true)
+}
+// 使用: db.Scopes(Active).Find(&users)
+// 生成 SQL: SELECT * FROM users WHERE active = true
+
+// ===================== 带参数的 Scope =====================
+func CreatedAfter(t time.Time) func(db *gorm.DB) *gorm.DB {
+    return func(db *gorm.DB) *gorm.DB {
+        return db.Where("created_at > ?", t)
+    }
+}
+
+func WithRole(role string) func(db *gorm.DB) *gorm.DB {
+    return func(db *gorm.DB) *gorm.DB {
+        return db.Where("role = ?", role)
+    }
+}
+
+// ===================== 组合使用多个 Scope =====================
+db.Scopes(Active, WithRole("admin"), Paginate(1, 20)).Find(&users)
+// 生成 SQL: SELECT * FROM users WHERE active = true AND role = 'admin' LIMIT 20 OFFSET 0
+// 多个 Scope 的条件用 AND 连接
+
+db.Scopes(
+    CreatedAfter(time.Now().AddDate(0, -1, 0)),  // 最近一个月
+    Paginate(2, 50),                              // 第 2 页，每页 50 条
+).Find(&orders)
+// 生成 SQL: SELECT * FROM orders WHERE created_at > '2024-02-15 ...' LIMIT 50 OFFSET 50
+
+// ===================== 条件性 Scope =====================
+// 有值才加条件，没值就跳过（适合动态搜索场景）
+func FilterByName(name string) func(db *gorm.DB) *gorm.DB {
+    return func(db *gorm.DB) *gorm.DB {
+        if name != "" {
+            return db.Where("name LIKE ?", "%"+name+"%")
+        }
+        return db // name 为空时不加任何条件
+    }
+}
+
+func FilterByAgeRange(minAge, maxAge int) func(db *gorm.DB) *gorm.DB {
+    return func(db *gorm.DB) *gorm.DB {
+        if minAge > 0 {
+            db = db.Where("age >= ?", minAge)
+        }
+        if maxAge > 0 {
+            db = db.Where("age <= ?", maxAge)
+        }
+        return db
+    }
+}
+
+// 动态搜索：用户可能只填了部分条件
+db.Scopes(
+    FilterByName(nameInput),           // nameInput = "" 时不加条件
+    FilterByAgeRange(minAgeInput, 0),  // maxAge = 0 时不限制上限
+    Paginate(pageInput, sizeInput),
+).Find(&users)
+```
+
+---
