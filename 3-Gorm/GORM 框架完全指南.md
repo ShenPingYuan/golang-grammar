@@ -690,3 +690,421 @@ db.Model(&User{}).Find(&resultMap)
 ```
 
 ---
+
+## 7. 更新（Update）
+
+```go
+// 假设已有: user = User{ID: 1, Name: "Alice", Age: 25, Email: "alice@go.dev"}
+
+// =============================================
+//              单字段更新
+// =============================================
+
+db.Model(&user).Update("name", "new_name")
+// 生成 SQL: UPDATE users SET name = 'new_name', updated_at = '2024-...' WHERE id = 1
+// ⚠️ 必须通过 Model 指定是哪条记录（user.ID = 1 → WHERE id = 1）
+// ⚠️ updated_at 自动更新
+
+// 条件更新（不依赖主键，用 Where 指定条件）
+db.Model(&User{}).Where("age < ?", 18).Update("active", false)
+// 生成 SQL: UPDATE users SET active = false, updated_at = '...' WHERE age < 18
+// 将所有 age < 18 的用户设为 inactive
+
+// =============================================
+//           多字段更新（Struct）
+// =============================================
+
+// ⚠️ 重要陷阱：struct 只更新非零值字段！零值字段（0、""、false）会被忽略
+db.Model(&user).Updates(User{Name: "hello", Age: 0})
+// 生成 SQL: UPDATE users SET name = 'hello', updated_at = '...' WHERE id = 1
+// ❌ Age = 0 是 int 零值，被 GORM 忽略，不会更新！
+// 如果你想把 Age 更新为 0，不要用 struct，用 Map 或 Select
+
+db.Model(&user).Updates(User{Name: "hello", Age: 30})
+// 生成 SQL: UPDATE users SET name = 'hello', age = 30, updated_at = '...' WHERE id = 1
+// Age = 30 不是零值，正常更新
+
+// =============================================
+//           多字段更新（Map）
+// =============================================
+
+// Map 可以更新零值，不存在"忽略"问题
+db.Model(&user).Updates(map[string]interface{}{"name": "hello", "age": 0})
+// 生成 SQL: UPDATE users SET name = 'hello', age = 0, updated_at = '...' WHERE id = 1
+// ✅ name 和 age 都会更新，包括 age = 0
+
+// =============================================
+//       Select / Omit 控制更新字段
+// =============================================
+
+// Select：只更新指定的字段（即使是零值也会更新）
+db.Model(&user).Select("Name", "Age").Updates(User{Name: "new", Age: 0})
+// 生成 SQL: UPDATE users SET name = 'new', age = 0, updated_at = '...' WHERE id = 1
+// ✅ 强制更新 Name 和 Age，即使 Age = 0
+
+// Select("*")：更新所有字段（包括零值），效果类似 Save
+db.Model(&user).Select("*").Updates(User{Name: "new"})
+// 生成 SQL: UPDATE users SET name='new', age=0, email='', active=false, updated_at='...' WHERE id = 1
+// ⚠️ 所有未赋值的字段都会被更新为零值！慎用
+
+// Omit：跳过指定字段，其余非零值字段都更新
+db.Model(&user).Omit("Name").Updates(User{Name: "ignored", Age: 30})
+// 生成 SQL: UPDATE users SET age = 30, updated_at = '...' WHERE id = 1
+// Name 被忽略，即使传了值
+
+// =============================================
+//              SQL 表达式
+// =============================================
+
+// 在现有值的基础上做计算（不是直接赋值）
+db.Model(&product).Update("price", gorm.Expr("price * ? + ?", 2, 10))
+// 生成 SQL: UPDATE products SET price = price * 2 + 10, updated_at = '...' WHERE id = 1
+// 原来 price = 50，执行后 price = 50 * 2 + 10 = 110
+
+db.Model(&product).Updates(map[string]interface{}{
+    "price": gorm.Expr("price + ?", 5),   // price = price + 5
+    "stock": gorm.Expr("stock - ?", 1),   // stock = stock - 1
+})
+// 生成 SQL: UPDATE products SET price = price + 5, stock = stock - 1, updated_at = '...' WHERE id = 1
+// 适合"扣库存"、"加积分"等场景，避免先 SELECT 再 UPDATE 的并发问题
+
+// =============================================
+//              批量更新
+// =============================================
+
+db.Model(&User{}).Where("active = ?", false).Updates(map[string]interface{}{"deleted": true})
+// 生成 SQL: UPDATE users SET deleted = true, updated_at = '...' WHERE active = false
+// 把所有 active=false 的用户标记为 deleted
+
+// =============================================
+//      Save：全量保存所有字段（包括零值）
+// =============================================
+
+user.Name = ""    // 空字符串
+user.Age = 0      // 零值
+db.Save(&user)
+// 生成 SQL: UPDATE users SET name='', age=0, email='alice@go.dev', active=true, updated_at='...' WHERE id=1
+// ⚠️ Save 会更新所有字段（包括零值），相当于 struct 的完整覆盖
+// ⚠️ 如果 user.ID = 0（没有主键），Save 会执行 INSERT 而非 UPDATE
+// 建议：除非确定要更新所有字段，否则用 Updates 更安全
+
+// =============================================
+//  不触发 Hook 和时间追踪的更新
+// =============================================
+
+// UpdateColumn / UpdateColumns 不会：
+//   ❌ 触发 BeforeUpdate / AfterUpdate 钩子
+//   ❌ 自动更新 updated_at
+// 适合纯粹的数据修正、数据迁移等场景
+
+db.Model(&User{}).Where("id = ?", 1).UpdateColumn("name", "silent")
+// 生成 SQL: UPDATE users SET name = 'silent' WHERE id = 1
+// 注意没有 updated_at = '...'
+
+db.Model(&User{}).Where("id = ?", 1).UpdateColumns(map[string]interface{}{"name": "silent", "age": 30})
+// 生成 SQL: UPDATE users SET name = 'silent', age = 30 WHERE id = 1
+```
+
+---
+
+## 8. 删除（Delete）
+
+```go
+// =============================================
+//         软删除（模型含 DeletedAt 时自动启用）
+// =============================================
+
+// 如果 User 嵌入了 gorm.Model（含 DeletedAt 字段），Delete 不会真正删除行
+// 而是将 deleted_at 设为当前时间
+db.Delete(&user)
+// 生成 SQL: UPDATE users SET deleted_at = '2024-03-15 ...' WHERE id = 1
+// 记录还在数据库中，只是被标记为"已删除"
+
+db.Delete(&user, 1)
+// 生成 SQL: UPDATE users SET deleted_at = '...' WHERE id = 1
+// 通过主键指定要删除的记录
+
+db.Delete(&User{}, []int{1, 2, 3})
+// 生成 SQL: UPDATE users SET deleted_at = '...' WHERE id IN (1, 2, 3)
+// 批量软删除
+
+// 条件删除
+db.Where("age < ?", 10).Delete(&User{})
+// 生成 SQL: UPDATE users SET deleted_at = '...' WHERE age < 10 AND deleted_at IS NULL
+
+// ===================== 软删除的查询行为 =====================
+
+// 默认查询自动排除已软删除的记录
+db.Find(&users)
+// 生成 SQL: SELECT * FROM users WHERE deleted_at IS NULL
+// 不会查到已删除的记录
+
+db.Where("name = ?", "Alice").First(&user)
+// 生成 SQL: SELECT * FROM users WHERE name = 'Alice' AND deleted_at IS NULL ORDER BY id LIMIT 1
+
+// 查找包含已软删除记录
+db.Unscoped().Where("name = ?", "Alice").Find(&users)
+// 生成 SQL: SELECT * FROM users WHERE name = 'Alice'
+// Unscoped() 去掉 deleted_at IS NULL 条件，能查到已删除的
+
+// ===================== 永久删除（物理删除）=====================
+
+db.Unscoped().Delete(&user)
+// 生成 SQL: DELETE FROM users WHERE id = 1
+// 真正从数据库删除这一行，不可恢复
+
+// ===================== 防止误删全表 =====================
+
+// ⚠️ 不带条件的删除会被 GORM 阻止，返回 ErrMissingWhereClause
+// db.Delete(&User{})  → 报错！
+
+// 如果确实需要删除全部记录：
+db.Where("1 = 1").Delete(&User{})
+// 生成 SQL: UPDATE users SET deleted_at = '...' WHERE 1 = 1 AND deleted_at IS NULL
+
+// 或者在配置中全局允许（不推荐）：
+// gorm.Config{AllowGlobalUpdate: true}
+```
+
+---
+
+## 9. 原生 SQL
+
+```go
+// ===================== Raw 查询 =====================
+
+// 执行原生 SELECT，结果映射到结构体
+var users []User
+db.Raw("SELECT * FROM users WHERE age > ?", 18).Scan(&users)
+// 直接执行: SELECT * FROM users WHERE age > 18
+// 结果扫描到 []User
+
+// 映射到自定义结构体
+var result struct {
+    Total int64
+    Avg   float64
+}
+db.Raw("SELECT COUNT(*) as total, AVG(age) as avg FROM users").Scan(&result)
+// result.Total = 用户总数, result.Avg = 平均年龄
+
+// ===================== Exec 执行（非查询语句）=====================
+
+db.Exec("UPDATE users SET name = ? WHERE id = ?", "new_name", 1)
+// 执行原生 UPDATE
+
+db.Exec("DROP TABLE IF EXISTS temp_users")
+// 执行原生 DDL
+
+// ===================== SQL Builder =====================
+
+// 不写完整 SQL，用 GORM 的链式方法拼接
+var results []map[string]interface{}
+db.Table("users").
+    Select("name", "age").
+    Where("id > ?", 5).
+    Scan(&results)
+// 生成 SQL: SELECT name, age FROM users WHERE id > 5
+// Table("users") → 指定表名（不依赖 Model）
+
+// ===================== Row / Rows =====================
+
+// 查询单行
+row := db.Table("users").Where("name = ?", "Alice").Select("name", "age").Row()
+// 生成 SQL: SELECT name, age FROM users WHERE name = 'Alice'
+
+var name string
+var age int
+row.Scan(&name, &age) // 手动扫描每个列到变量
+
+// 查询多行
+rows, _ := db.Model(&User{}).Where("age > ?", 18).Rows()
+// 生成 SQL: SELECT * FROM users WHERE age > 18
+defer rows.Close() // ⚠️ 必须关闭，否则连接泄漏
+
+for rows.Next() {
+    var user User
+    db.ScanRows(rows, &user) // 将当前行扫描到 User 结构体（比手动 Scan 方便）
+    fmt.Println(user)
+}
+
+// ===================== DryRun 模式 =====================
+
+// 只生成 SQL，不真正执行，用于调试
+stmt := db.Session(&gorm.Session{DryRun: true}).
+    Where("name = ?", "Alice").
+    Find(&User{}).Statement
+
+fmt.Println(stmt.SQL.String())   // "SELECT * FROM users WHERE name = ? AND deleted_at IS NULL"
+fmt.Println(stmt.Vars)           // ["Alice"]
+// 可以看到生成的 SQL 和绑定参数，不会实际查数据库
+```
+
+---
+
+## 10. 关联关系
+
+```go
+// =============================================
+//              Belongs To（属于）一对一/一对多
+// =============================================
+
+// 一个 Order 属于一个 User
+// 外键放在 Order 表中（"子"表持有外键）
+type Order struct {
+    gorm.Model
+    Amount float64
+    UserID uint    // 外键，默认命名规则：关联结构体名 + "ID" → UserID
+    User   User    // 关联字段：通过 UserID 找到对应的 User
+    // 建表后 orders 表有 user_id 列，指向 users 表的 id
+}
+
+// 自定义外键名
+type Order2 struct {
+    gorm.Model
+    Amount    float64
+    CreatorID uint                              // 外键字段叫 CreatorID 而非 UserID
+    Creator   User `gorm:"foreignKey:CreatorID"` // 告诉 GORM：用 CreatorID 关联 User
+    // 建表后 orders 表有 creator_id 列
+}
+
+// =============================================
+//              Has One（拥有一个）1对1
+// =============================================
+
+// 一个 User 拥有一个 Profile
+// 外键在 Profile 表中（"子"表持有外键）
+type User struct {
+    gorm.Model
+    Name    string
+    Profile Profile // has one：User 拥有一个 Profile
+}
+type Profile struct {
+    gorm.Model
+    UserID uint   // 外键：指向 users 表的 id
+    Bio    string
+    Avatar string
+    // 建表后 profiles 表有 user_id 列
+}
+// Has One vs Belongs To 的区别：
+//   Has One:    外键在"对方"表（Profile 表有 user_id）
+//   Belongs To: 外键在"自己"表（Order 表有 user_id）
+//   本质上是从哪个方向看的区别
+
+// =============================================
+//            Has Many（拥有多个）一对多 
+// =============================================
+
+// 一个 User 拥有多个 Order
+type User struct {
+    gorm.Model
+    Name   string
+    Orders []Order // has many：用切片表示"多个"
+}
+// 外键在 Order 表中（Order.UserID → User.ID）
+// GORM 自动根据 User → Order 的关系找到 Order.UserID 作为外键
+
+// =============================================
+//          Many To Many（多对多）
+// =============================================
+
+// 一个 User 可以学多门语言，一门语言可以被多个 User 学习
+type User struct {
+    gorm.Model
+    Name      string
+    Languages []Language `gorm:"many2many:user_languages;"`
+    // many2many:user_languages → 指定中间表名为 user_languages
+    // GORM 会自动创建中间表 user_languages，包含 user_id 和 language_id 两列
+}
+type Language struct {
+    gorm.Model
+    Name string
+}
+// 中间表结构（GORM 自动创建）：
+//   user_languages:
+//     user_id     → 外键指向 users.id
+//     language_id → 外键指向 languages.id
+
+// 自定义中间表（需要额外字段时）
+type UserLanguage struct {
+    UserID     uint `gorm:"primaryKey"`
+    LanguageID uint `gorm:"primaryKey"`
+    Skill      int  // 额外字段：熟练度
+}
+// 需要用 SetupJoinTable 注册自定义中间表
+db.SetupJoinTable(&User{}, "Languages", &UserLanguage{})
+
+// =============================================
+//             多态关联
+// =============================================
+
+// Comment 可以属于 Article 或 Video（不同类型的"父"表）
+type Comment struct {
+    gorm.Model
+    Content         string
+    CommentableID   uint   // 父记录的 ID（如 Article 的 ID 或 Video 的 ID）
+    CommentableType string // 父记录的类型（"articles" 或 "videos"）
+}
+type Article struct {
+    gorm.Model
+    Title    string
+    Comments []Comment `gorm:"polymorphic:Commentable;"`
+    // polymorphic:Commentable → 使用 CommentableID + CommentableType 作为多态外键
+}
+type Video struct {
+    gorm.Model
+    URL      string
+    Comments []Comment `gorm:"polymorphic:Commentable;"`
+}
+// 当为 Article（ID=1）创建 Comment 时：
+//   CommentableID = 1, CommentableType = "articles"
+// 当为 Video（ID=5）创建 Comment 时：
+//   CommentableID = 5, CommentableType = "videos"
+
+// =============================================
+//       Association Mode（关联操作）
+// =============================================
+
+// 创建时自动写关联
+db.Create(&User{
+    Name:   "Alice",
+    Orders: []Order{{Amount: 100}, {Amount: 200}},
+})
+// 生成 SQL:
+//   INSERT INTO users (name, ...) VALUES ('Alice', ...)
+//   INSERT INTO orders (user_id, amount, ...) VALUES (1, 100, ...), (1, 200, ...)
+// 自动将 user_id 填入 orders 表
+
+// 添加关联（给已有 user 追加一个 order）
+db.Model(&user).Association("Orders").Append(&Order{Amount: 300})
+// 生成 SQL: INSERT INTO orders (user_id, amount, ...) VALUES (1, 300, ...)
+
+// 替换关联（清空原有关联，用新的替换）
+db.Model(&user).Association("Languages").Replace(&Language{Name: "Go"}, &Language{Name: "Rust"})
+// 先清除 user_languages 中该 user 的所有记录，再插入新的关联
+
+// 删除关联（解除关系，不删除记录本身）
+db.Model(&user).Association("Orders").Delete(&order)
+// Has Many/Many2Many: 清除外键（user_id 设为 NULL 或删除中间表记录）
+// ⚠️ 不会删除 orders 表中的记录本身
+
+// 清空关联（解除该 user 的所有 orders 关联）
+db.Model(&user).Association("Orders").Clear()
+// 将所有关联 order 的 user_id 设为 NULL（或删除中间表记录）
+
+// 关联计数
+count := db.Model(&user).Association("Orders").Count()
+// 生成 SQL: SELECT COUNT(*) FROM orders WHERE user_id = 1
+// count = 该 user 有多少个 order
+
+// 查找关联
+var orders []Order
+db.Model(&user).Association("Orders").Find(&orders)
+// 生成 SQL: SELECT * FROM orders WHERE user_id = 1
+// orders = 该 user 的所有订单
+
+// 带条件查找关联
+db.Model(&user).Association("Orders").Find(&orders, "amount > ?", 50)
+// 生成 SQL: SELECT * FROM orders WHERE user_id = 1 AND amount > 50
+```
+
+---
