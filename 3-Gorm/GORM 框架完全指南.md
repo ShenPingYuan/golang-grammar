@@ -1432,3 +1432,261 @@ db.Scopes(
 ```
 
 ---
+
+## 15. 泛型 API（v1.30+）
+
+```go
+// GORM v1.30 引入泛型 API，核心改进：
+//   ✅ 返回值直接是目标类型（不需要预声明变量再传指针）
+//   ✅ 强制要求 context.Context（更规范的超时 / 取消控制）
+//   ✅ 编译器类型检查（传错类型编译报错）
+
+import (
+    "context"
+    "gorm.io/gorm"
+)
+
+type Product struct {
+    gorm.Model
+    Code  string
+    Price uint
+}
+
+func main() {
+    db, _ := gorm.Open(sqlite.Open("test.db"), &gorm.Config{})
+    ctx := context.Background()
+
+    // ===================== Create =====================
+    err := gorm.G[Product](db).Create(ctx, &Product{Code: "D42", Price: 100})
+    // 等价传统写法: db.WithContext(ctx).Create(&Product{Code: "D42", Price: 100})
+
+    // ===================== 查询单条 =====================
+    product, err := gorm.G[Product](db).Where("code = ?", "D42").First(ctx)
+    // 返回 (Product, error) ← 直接返回 Product 值，不需要预声明 var product Product
+    // 传统写法需要:
+    //   var product Product
+    //   err := db.WithContext(ctx).Where("code = ?", "D42").First(&product).Error
+
+    // ===================== 查询多条 =====================
+    products, err := gorm.G[Product](db).Where("price > ?", 50).Find(ctx)
+    // 返回 ([]Product, error) ← 直接返回切片
+    // 传统写法:
+    //   var products []Product
+    //   db.WithContext(ctx).Where("price > ?", 50).Find(&products)
+
+    // ===================== 更新 =====================
+    err = gorm.G[Product](db).Where("id = ?", product.ID).Update(ctx, "Price", 200)
+    // 生成 SQL: UPDATE products SET price = 200, updated_at = '...' WHERE id = 1
+
+    // 多字段更新
+    err = gorm.G[Product](db).Where("id = ?", product.ID).Updates(ctx, Product{Code: "E42", Price: 300})
+    // 生成 SQL: UPDATE products SET code = 'E42', price = 300, updated_at = '...' WHERE id = 1
+    // ⚠️ 和传统 API 一样，struct 零值字段会被忽略
+
+    // ===================== 删除 =====================
+    err = gorm.G[Product](db).Where("id = ?", product.ID).Delete(ctx)
+    // 生成 SQL: UPDATE products SET deleted_at = '...' WHERE id = 1（软删除）
+}
+```
+
+---
+
+## 16. Session 与上下文
+
+```go
+// =============================================
+//    Session：创建新的 DB 会话，避免条件污染
+// =============================================
+
+// ⚠️ 问题场景：
+//   tx := db.Where("name = ?", "Alice")
+//   tx.Find(&users1)      // ← 带 name='Alice' 条件
+//   tx.Find(&users2)      // ← 也带 name='Alice' 条件！条件被"污染"了
+// 解决：用 Session 创建干净的会话
+
+// NewDB 模式：不继承之前的 Where 条件
+tx := db.Where("name = ?", "Alice").Session(&gorm.Session{NewDB: true})
+tx.Find(&users)
+// 生成 SQL: SELECT * FROM users
+// ← 没有 name='Alice' 条件，因为 NewDB: true 抛弃了之前的条件
+
+// DryRun：只生成 SQL 不执行（调试用）
+stmt := db.Session(&gorm.Session{DryRun: true}).Create(&user).Statement
+fmt.Println(stmt.SQL.String()) // 打印 INSERT 语句
+fmt.Println(stmt.Vars)         // 打印绑定参数
+// 数据库没有任何操作
+
+// PrepareStmt：开启预编译语句缓存
+// 同一条 SQL 模板只编译一次，后续只传参数，提升高频查询性能
+tx = db.Session(&gorm.Session{PrepareStmt: true})
+
+// SkipHooks：跳过所有 Hook
+db.Session(&gorm.Session{SkipHooks: true}).Create(&user)
+// BeforeCreate、AfterCreate 等都不触发
+
+// =============================================
+//               Context
+// =============================================
+
+// 传入 context.Context 实现超时控制、取消信号
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+// 5 秒超时：如果查询 5 秒还没完成，自动取消
+
+db.WithContext(ctx).Find(&users)
+// 生成 SQL 正常，但如果执行超过 5 秒，会被 context 取消，返回 context.DeadlineExceeded
+
+db.WithContext(ctx).Create(&user)
+// 同理，INSERT 超时也会被取消
+```
+
+---
+
+## 17. 自定义数据类型
+
+```go
+import (
+    "database/sql/driver"
+    "encoding/json"
+    "strings"
+)
+
+// =============================================
+//   自定义类型：实现 Scanner + Valuer 接口
+// =============================================
+// Scanner: 从数据库读取时调用（[]byte → Go 类型）
+// Valuer:  写入数据库时调用（Go 类型 → 数据库可接受的值）
+
+// --- JSON 类型 ---
+// 将 map[string]interface{} 存为数据库的 JSON 列
+type JSON map[string]interface{}
+
+// 从数据库读取时调用：数据库的 JSON 字符串 → Go 的 map
+func (j *JSON) Scan(value interface{}) error {
+    bytes, ok := value.([]byte) // 数据库驱动返回 []byte
+    if !ok {
+        return errors.New("type assertion to []byte failed")
+    }
+    return json.Unmarshal(bytes, j) // JSON 字符串 → map
+}
+
+// 写入数据库时调用：Go 的 map → JSON 字符串
+func (j JSON) Value() (driver.Value, error) {
+    return json.Marshal(j) // map → JSON 字符串 → 存入数据库
+}
+
+// 使用
+type Product struct {
+    gorm.Model
+    Name  string
+    Attrs JSON `gorm:"type:json"` // MySQL JSON 列类型
+}
+
+db.Create(&Product{
+    Name:  "Phone",
+    Attrs: JSON{"color": "black", "storage": "128GB"},
+})
+// 存入数据库的 attrs 列内容: {"color":"black","storage":"128GB"}
+
+var p Product
+db.First(&p, 1)
+fmt.Println(p.Attrs["color"]) // "black"  ← 自动从 JSON 字符串反序列化为 map
+
+// --- StringSlice 类型 ---
+// 将 []string 存为逗号分隔的字符串（如 "go,rust,python"）
+type StringSlice []string
+
+func (s *StringSlice) Scan(value interface{}) error {
+    str, ok := value.(string) // 数据库返回 string
+    if !ok {
+        bytes, ok := value.([]byte)
+        if !ok {
+            return errors.New("unsupported type")
+        }
+        str = string(bytes)
+    }
+    *s = strings.Split(str, ",") // "go,rust,python" → ["go", "rust", "python"]
+    return nil
+}
+
+func (s StringSlice) Value() (driver.Value, error) {
+    return strings.Join(s, ","), nil // ["go", "rust", "python"] → "go,rust,python"
+}
+
+// --- GORM 内置 Serializer（更简便的方式）---
+// 不需要手写 Scanner/Valuer，加 serializer tag 即可
+type UserPreference struct {
+    gorm.Model
+    Settings map[string]interface{} `gorm:"serializer:json"` // 自动用 JSON 序列化/反序列化
+    Tags     []string               `gorm:"serializer:json"` // 也可以是切片
+}
+// GORM 会自动在读写时调用 json.Marshal / json.Unmarshal
+```
+
+---
+
+## 18. 性能优化
+
+```go
+// ===================== 1. 跳过默认事务 =====================
+// GORM 默认每个 Create/Update/Delete 都包在一个事务里
+// 如果你的场景不需要事务（如只读、或自己手动管理事务），可以关闭，约提升 30%
+db, _ := gorm.Open(mysql.Open(dsn), &gorm.Config{
+    SkipDefaultTransaction: true,
+})
+
+// ===================== 2. 预编译缓存 =====================
+// 同一条 SQL 模板只编译一次，后续只传参数
+// 高频查询场景提升明显
+db, _ = gorm.Open(mysql.Open(dsn), &gorm.Config{
+    PrepareStmt: true,
+})
+
+// ===================== 3. 只查需要的列 =====================
+db.Select("id", "name").Find(&users)
+// 生成: SELECT id, name FROM users
+// 避免 SELECT *，减少数据传输量，尤其是表有 TEXT/BLOB 大字段时
+
+// ===================== 4. 批量插入 =====================
+db.CreateInBatches(&users, 100) // 每批 100 条
+// 比逐条 Insert 快数十倍
+
+// ===================== 5. 分批处理大量数据 =====================
+db.Where("active = ?", true).FindInBatches(&users, 500, func(tx *gorm.DB, batch int) error {
+    for _, user := range users {
+        // 在一批中一个一个处理 user
+    }
+    // 每次只加载 500 条到内存，处理完再加载下一批
+    // 百万级数据也不会 OOM
+    return nil
+})
+
+// ===================== 6. 用 Map 接收结果 =====================
+// 避免反射开销（GORM 将 row → struct 需要用反射）
+var results []map[string]interface{}
+db.Model(&User{}).Find(&results)
+// 结果直接存到 map，省去了反射映射的开销
+
+// ===================== 7. 索引优化 =====================
+type User struct {
+    gorm.Model
+    Email  string `gorm:"uniqueIndex"`              // 唯一索引：加速 WHERE email = ?
+    Name   string `gorm:"index"`                    // 普通索引：加速 WHERE name = ?
+    Age    int    `gorm:"index:idx_age_active"`      // 复合索引
+    Active bool   `gorm:"index:idx_age_active"`      // (age, active) 组合查询更快
+}
+
+// ===================== 8. Joins 替代 Preload =====================
+// 一对一场景用 Joins 比 Preload 少一条 SQL
+db.Joins("Profile").Find(&users)   // 1 条 SQL（LEFT JOIN）
+db.Preload("Profile").Find(&users) // 2 条 SQL
+
+// ===================== 9. 连接池调优 =====================
+sqlDB, _ := db.DB()
+sqlDB.SetMaxIdleConns(10)           // 空闲连接保持 10 个
+sqlDB.SetMaxOpenConns(100)          // 最多同时 100 个连接
+sqlDB.SetConnMaxLifetime(time.Hour) // 连接最多存活 1 小时
+// 根据实际并发量和数据库配置调整
+```
+
+---

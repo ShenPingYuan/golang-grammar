@@ -50,6 +50,7 @@ func main() {
 		Logger: logger.Default.LogMode(logger.Info), // Silent/Error/Warn/Info
 	})
 
+	
 	// if err != nil {
 	// 	log.Fatalf("failed to connect database: %v", err)
 	// }
