@@ -1690,3 +1690,236 @@ sqlDB.SetConnMaxLifetime(time.Hour) // 连接最多存活 1 小时
 ```
 
 ---
+
+## 19. 常用配置
+
+```go
+import (
+    "gorm.io/gorm"
+    "gorm.io/gorm/logger"
+    "gorm.io/gorm/schema"
+)
+
+db, _ := gorm.Open(mysql.Open(dsn), &gorm.Config{
+    // 跳过默认事务（提升写入性能）
+    SkipDefaultTransaction: true,
+
+    // 命名策略
+    NamingStrategy: schema.NamingStrategy{
+        TablePrefix:   "t_",   // 所有表名加前缀：User → t_users
+        SingularTable: true,   // 使用单数表名：User → t_user（而非 t_users）
+        NoLowerCase:   false,  // false = 转小写（默认）
+    },
+
+    // 日志级别
+    //   Silent → 不输出任何日志
+    //   Error  → 只输出 error
+    //   Warn   → error + 慢 SQL
+    //   Info   → 全部 SQL（开发环境推荐）
+    Logger: logger.Default.LogMode(logger.Info),
+
+    // 预编译缓存
+    PrepareStmt: true,
+
+    // 禁止自动创建外键约束
+    // AutoMigrate 时不会在数据库创建 FOREIGN KEY 约束
+    // 很多团队不用数据库外键，只在应用层维护关系
+    DisableForeignKeyConstraintWhenMigrating: true,
+
+    // 允许全局 Update / Delete（默认不允许无条件更新/删除，防止误操作）
+    // AllowGlobalUpdate: true,  // ⚠️ 谨慎开启
+})
+
+// ===================== 自定义 Logger =====================
+newLogger := logger.New(
+    log.New(os.Stdout, "\r\n", log.LstdFlags), // 输出目标
+    logger.Config{
+        SlowThreshold:             200 * time.Millisecond, // 慢 SQL 阈值（超过 200ms 输出 WARN）
+        LogLevel:                  logger.Warn,
+        IgnoreRecordNotFoundError: true,                   // 忽略 RecordNotFound 错误的日志（太多了没意义）
+        Colorful:                  true,                   // 彩色输出（终端好看点）
+    },
+)
+db, _ = gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: newLogger})
+
+// ===================== Database Resolver（读写分离）=====================
+import "gorm.io/plugin/dbresolver"
+
+db.Use(dbresolver.Register(dbresolver.Config{
+    Sources:  []gorm.Dialector{mysql.Open(dsnWrite)},                         // 写库（主库）
+    Replicas: []gorm.Dialector{mysql.Open(dsnRead1), mysql.Open(dsnRead2)},   // 读库（从库，可多个）
+    Policy:   dbresolver.RandomPolicy{},                                       // 负载均衡策略：随机
+}).SetMaxIdleConns(10).SetMaxOpenConns(100))
+// 效果：
+//   db.Create / db.Update / db.Delete → 自动路由到 Sources（写库）
+//   db.Find / db.First                → 自动路由到 Replicas（读库，随机选一个）
+```
+
+---
+
+## 20. 常见易错点
+
+```go
+// =============================================
+// ❌ 1. struct 更新零值被忽略（最常见的坑）
+// =============================================
+
+db.Model(&user).Updates(User{Name: "Alice", Age: 0})
+// 生成 SQL: UPDATE users SET name = 'Alice', updated_at = '...' WHERE id = 1
+// ❌ Age = 0 被忽略了！因为 0 是 int 的零值，GORM 认为你没赋值
+
+// ✅ 解法一：用 Map（零值不会被忽略）
+db.Model(&user).Updates(map[string]interface{}{"name": "Alice", "age": 0})
+// 生成 SQL: UPDATE users SET name = 'Alice', age = 0, updated_at = '...' WHERE id = 1
+
+// ✅ 解法二：用 Select 强制指定要更新的字段
+db.Model(&user).Select("Name", "Age").Updates(User{Name: "Alice", Age: 0})
+// 生成 SQL: UPDATE users SET name = 'Alice', age = 0, updated_at = '...' WHERE id = 1
+
+// 同理，Where struct 也有这个问题：
+db.Where(&User{Active: false}).Find(&users)
+// ❌ Active = false 是零值，被忽略 → 变成 SELECT * FROM users（无条件）
+// ✅ 用 Map: db.Where(map[string]interface{}{"active": false}).Find(&users)
+
+
+// =============================================
+// ❌ 2. 链式调用条件污染
+// =============================================
+
+// 错误用法：在全局 db 上加 Where 条件，会影响后续所有查询
+tx := db.Where("name = ?", "Alice")
+tx.Find(&users1) // 生成: WHERE name = 'Alice' ← 正常
+tx.Find(&users2) // 生成: WHERE name = 'Alice' ← 也带上了！
+
+// ✅ 解法：每次查询用新的 Session
+tx := db.Session(&gorm.Session{NewDB: true})
+// 或者直接用全局 db，每次 db.Where(...).Find(...) 不会互相影响
+// （GORM 的链式调用会创建新的 Statement，全局 db 本身是安全的）
+
+
+// =============================================
+// ❌ 3. First 找不到记录会返回 error
+// =============================================
+
+err := db.First(&user, 999).Error
+// 如果 id=999 的记录不存在:
+//   err = gorm.ErrRecordNotFound（不是 nil）
+//   user 为零值
+
+// ⚠️ 很多人没检查这个 error，以为查不到就是零值
+
+// ✅ 正确处理：
+if errors.Is(err, gorm.ErrRecordNotFound) {
+    fmt.Println("用户不存在")
+} else if err != nil {
+    fmt.Println("数据库错误:", err)
+}
+
+// 或者用 Find（找不到不报错，只是空切片）：
+var users []User
+db.Where("id = ?", 999).Find(&users)
+if len(users) == 0 {
+    fmt.Println("用户不存在")
+}
+
+
+// =============================================
+// ❌ 4. 忘记处理 error
+// =============================================
+
+db.Create(&user) // 如果主键冲突、字段超长等原因失败了，你永远不知道
+
+// ✅ 每次操作都检查 error
+if err := db.Create(&user).Error; err != nil {
+    log.Fatal(err)
+}
+
+
+// =============================================
+// ❌ 5. Save 更新全部字段（包括零值）
+// =============================================
+
+user.Age = 0     // 原本 Age = 25
+db.Save(&user)
+// 生成 SQL: UPDATE users SET name='Alice', age=0, email='alice@go.dev', ... WHERE id=1
+// ⚠️ Save 把所有字段都写了一遍，Age 被覆盖为 0
+
+// ✅ 如果只想更新特定字段，用 Updates
+db.Model(&user).Updates(map[string]interface{}{"age": 0})
+
+
+// =============================================
+// ❌ 6. 无条件删除/更新被阻止
+// =============================================
+
+db.Delete(&User{})
+// ❌ 报错: WHERE conditions required（ErrMissingWhereClause）
+// GORM 防止你意外删除全表
+
+db.Model(&User{}).Update("active", false)
+// ❌ 同样报错，防止你意外更新全表
+
+// ✅ 如果确实要操作全部记录：
+db.Where("1 = 1").Delete(&User{})
+db.Model(&User{}).Where("1 = 1").Update("active", false)
+
+
+// =============================================
+// ❌ 7. N+1 查询问题
+// =============================================
+
+db.Find(&users) // 查出 100 个用户
+for _, user := range users {
+    db.Model(&user).Association("Orders").Find(&orders)
+    // ❌ 每个用户查一次 orders → 100 + 1 = 101 条 SQL
+}
+
+// ✅ 用 Preload 一次性加载（只需 2 条 SQL）
+db.Preload("Orders").Find(&users)
+
+
+// =============================================
+// ❌ 8. 软删除后忘记 Unscoped
+// =============================================
+
+db.Delete(&user, 1) // 软删除
+
+db.Find(&users)
+// 生成: SELECT * FROM users WHERE deleted_at IS NULL
+// ❌ 已删除的 user 查不到
+
+// ✅ 需要查已删除的记录时：
+db.Unscoped().Find(&users)
+// 生成: SELECT * FROM users（不加 deleted_at IS NULL）
+
+
+// =============================================
+// ❌ 9. 指望 AutoMigrate 删列
+// =============================================
+
+// 如果你从 User struct 里删掉了 Age 字段，然后运行 AutoMigrate
+// ❌ 数据库的 age 列不会被删除！
+// AutoMigrate 只增不减：加列加索引 ✅，删列改类型 ❌
+
+// ✅ 生产环境用专用迁移工具: golang-migrate / goose / atlas
+
+
+// =============================================
+// ❌ 10. 并发场景共享 tx
+// =============================================
+
+tx := db.Where("name = ?", "Alice")
+
+// ❌ 多个 goroutine 共享同一个 tx
+go func() { tx.Find(&users1) }() // 可能出问题
+go func() { tx.Find(&users2) }()
+
+// ✅ 全局 db 是并发安全的，每个 goroutine 直接用 db：
+go func() { db.Where("name = ?", "Alice").Find(&users1) }()
+go func() { db.Where("name = ?", "Bob").Find(&users2) }()
+// 每次 db.Where() 会创建新的 Statement，互不影响
+```
+
+---
+
+> 本文覆盖 GORM 日常开发核心场景，相较于官方文档，更多代码示例说明，可收藏作为速查手册。官方文档参考 [gorm.io/docs](https://gorm.io/docs/)。

@@ -48,7 +48,7 @@ func main() {
 		// ========== 加上这段：打印 SQL ==========
 		Logger: logger.Default.LogMode(logger.Info), // Silent/Error/Warn/Info
 		// ======================================
-
+		AllowGlobalUpdate: true,
 	})
 
 	// u := User{
@@ -66,7 +66,7 @@ func main() {
 	// })
 	// db.Save(&u)
 	var users []User
-	db.Model(&User{}).Where("id !=?", 70).Offset(10).Limit(-1).Find(&users)
+	db.Model(&User{}).Unscoped().Where("id !=?", 70).Offset(10).Limit(-1).Find(&users)
 }
 
 type Post struct {
